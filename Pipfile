@@ -18,6 +18,7 @@ accelerate = "*"
 pillow = "*"
 sentencepiece = "*"
 protobuf = "*"
+bitsandbytes = "*"
 
 [dev-packages]
 
