@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[[source]]
+name = "pytorch-nightly-cu121"
+url = "https://download.pytorch.org/whl/cu128"
+verify_ssl = true
+
+[packages]
+torch = {version = "==2.7.0", index = "pytorch"}
+torchvision = {version = "==0.22.0", index = "pytorch"}
+torchaudio = {version = "==2.7.0", index = "pytorch"}
+diffusers = "*"
+transformers = "*"
+accelerate = "*"
+pillow = "*"
+sentencepiece = "*"
+protobuf = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
