@@ -27,7 +27,7 @@ def scrape_images(query, max_images, download_path="training-images"):
             size=None,
             color=None,
             type_image="photo",
-            layout="Wide",
+            layout="Square",
             license_image=None,
         )
 
@@ -64,7 +64,14 @@ def scrape_images(query, max_images, download_path="training-images"):
                     for chunk in response.iter_content(8192):
                         f.write(chunk)
                 
+                # Create empty .txt file with same name
+                txt_filename = f"image{downloaded_count + 1}.txt"
+                txt_filepath = os.path.join(download_path, txt_filename)
+                with open(txt_filepath, "w") as txt_file:
+                    txt_file.write("")  # Create empty file
+                
                 print(f"Saved to {filepath}")
+                print(f"Created empty prompt file: {txt_filepath}")
                 downloaded_count += 1
 
             except requests.exceptions.RequestException as e:

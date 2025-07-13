@@ -1,20 +1,20 @@
 import os
 import torch
-from diffusers import StableDiffusion3Pipeline
+from diffusers import StableDiffusion3Pipeline, DDPMScheduler
 from peft import LoraConfig, get_peft_model
 from torchvision import transforms
 from PIL import Image
-from torch.optim import AdamW
+from bitsandbytes.optim import AdamW8bit
 from torch.utils.data import Dataset, DataLoader
 from accelerate import Accelerator  # For mixed precision and multi-GPU if needed
+from diffusers import BitsAndBytesConfig, SD3Transformer2DModel
 
 class CustomDataset(Dataset):
-    def __init__(self, image_paths, prompt):
+    def __init__(self, image_paths):
         self.image_paths = image_paths
-        self.prompt = prompt
         self.transform = transforms.Compose([
-            transforms.Resize(1024),
-            transforms.CenterCrop(1024),
+            transforms.Resize(512),
+            transforms.CenterCrop(512),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),  # Stable Diffusion normalization
         ])
@@ -23,49 +23,89 @@ class CustomDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image = Image.open(self.image_paths[idx]).convert("RGB")
-        image = self.transform(image)
-        return {"pixel_values": image, "text": self.prompt}
+         img_path = self.image_paths[idx]
+         image = Image.open(img_path).convert("RGB")
+         image = self.transform(image)
+         base, _ = os.path.splitext(img_path)
+         txt_path = base + ".txt"
+         with open(txt_path, "r", encoding="utf-8") as f:
+            prompt = f.readline().strip()
+         print(prompt)
+         return {"pixel_values": image, "text": prompt}
 
-# Initialize Accelerator for FP16/mixed precision
-accelerator = Accelerator(mixed_precision="bf16")
 
-# Load base Stable Diffusion model
-model_id = "stabilityai/stable-diffusion-3.5-large"
-pipe = StableDiffusion3Pipeline.from_pretrained(model_id, torch_dtype=torch.float16).to("cuda")
-# pipe = pipe.to(accelerator.device)
-pipe.enable_attention_slicing()  # Memory optimization
-pipe.vae.enable_xformers_memory_efficient_attention()  # Optional, if xformers installed
+model_id = "stabilityai/stable-diffusion-3.5-medium"
 
-# Apply LoRA to UNet's cross-attention layers
+nf4_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
+)
+model_nf4 = SD3Transformer2DModel.from_pretrained(
+    model_id,
+    subfolder="transformer",
+    quantization_config=nf4_config,
+    torch_dtype=torch.bfloat16
+)
+
+pipe = StableDiffusion3Pipeline.from_pretrained(
+    model_id, 
+    transformer=model_nf4,
+    torch_dtype=torch.bfloat16,
+    safety_checker=None,
+    requires_safety_checker=False
+)
+
+# For quantized models, use lighter CPU offloading to avoid conflicts
+# pipe.enable_model_cpu_offload()  # Disabled - conflicts with quantization
+# pipe.enable_sequential_cpu_offload()  # Disabled - conflicts with quantization
+
+# Initialize Accelerator for mixed precision (without aggressive CPU offloading)
+accelerator = Accelerator(
+    mixed_precision="bf16",
+    # cpu=True,  # Disabled - conflicts with quantized model
+)
+
+# Move pipeline to accelerator device after setup
+pipe = pipe.to(accelerator.device)
+
+# Memory optimizations that work with quantized models
+pipe.enable_attention_slicing()  # Safe with quantization
+pipe.vae.enable_slicing()  # Safe with quantization
+
+# Set environment variable for better memory management
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Replace inference scheduler with a training-compatible noise scheduler (DDPM)
+noise_scheduler = DDPMScheduler.from_pretrained(model_id, subfolder="scheduler")
+
+# Apply LoRA to transformer's cross-attention layers
 lora_config = LoraConfig(
-    r=16,  # Rank: higher = more capacity, but start low for small data
+    r=8,  # Rank: higher = more capacity, but start low for small data
     lora_alpha=32,
     target_modules=["to_k", "to_q", "to_v", "to_out.0"],  # Cross-attention targets
     lora_dropout=0.05,
 )
 pipe.transformer = get_peft_model(pipe.transformer, lora_config)
-
-# Optionally apply LoRA to text encoder for better text understanding
-# pipe.text_encoder = get_peft_model(pipe.text_encoder, lora_config)
+pipe.transformer.enable_gradient_checkpointing()  # Uncomment to save memory during training
 
 # Prepare dataset to use all images in the training folder
 training_dir = "training-images"
 supported_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
 image_paths = [os.path.join(training_dir, f) for f in os.listdir(training_dir) if f.lower().endswith(supported_extensions)]
-
-prompt = "a photo of sks cat"  # Use 'sks' as unique token for your subject
-dataset = CustomDataset(image_paths, prompt)
+dataset = CustomDataset(image_paths)
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # Small batch for small data
 
 # Optimizer (only on LoRA params)
-optimizer = AdamW(pipe.transformer.parameters(), lr=1e-4)  # Add text_encoder.params if using
+optimizer_params = list(pipe.transformer.parameters())
+# If using LoRA on text encoders: optimizer_params += list(pipe.text_encoder.parameters()) + list(pipe.text_encoder_2.parameters()) + list(pipe.text_encoder_3.parameters())
+optimizer = AdamW8bit(optimizer_params, lr=1e-4)
 
 # Prepare with Accelerator
 pipe.transformer, optimizer, dataloader = accelerator.prepare(pipe.transformer, optimizer, dataloader)
 
 # Training loop
-num_epochs = 50  # Adjust based on convergence; monitor loss
+num_epochs = 5  # Adjust based on convergence; monitor loss
 for epoch in range(num_epochs):
     total_loss = 0
     for batch in dataloader:
@@ -74,28 +114,36 @@ for epoch in range(num_epochs):
         pixel_values = batch["pixel_values"].to(accelerator.device)
         prompts = batch["text"]
 
-        # Encode text
-        text_inputs = pipe.tokenizer(
-            prompts, padding="max_length", max_length=pipe.tokenizer.model_max_length, truncation=True, return_tensors="pt"
+        # Encode text using the pipeline's method (handles all encoders correctly)
+        encoder_hidden_states, _, pooled_projections, _ = pipe.encode_prompt(
+            prompt=prompts,
+            prompt_2=None,
+            prompt_3=None,
+            device=accelerator.device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=False,  # No CFG during training
         )
-        text_input_ids = text_inputs.input_ids.to(accelerator.device)
-        encoder_hidden_states = pipe.text_encoder(text_input_ids)[0]
 
         # Encode image to latents
-        pixel_values = pixel_values.to(dtype=torch.float16)
+        pixel_values = pixel_values.to(dtype=torch.bfloat16)
         latents = pipe.vae.encode(pixel_values).latent_dist.sample() * pipe.vae.config.scaling_factor
 
         # Sample noise and timesteps
         noise = torch.randn_like(latents)
         bsz = latents.shape[0]
-        timesteps = torch.randint(0, pipe.scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+        timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
         timesteps = timesteps.long()
 
         # Add noise to latents
-        noisy_latents = pipe.scheduler.add_noise(latents, noise, timesteps)
+        noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-        # Predict noise with UNet
-        noise_pred = pipe.unet(noisy_latents, timesteps, encoder_hidden_states).sample
+        # Predict noise with transformer
+        noise_pred = pipe.transformer(
+            noisy_latents,
+            timestep=timesteps,
+            encoder_hidden_states=encoder_hidden_states,
+            pooled_projections=pooled_projections
+        ).sample
 
         # Compute MSE loss
         loss = torch.nn.functional.mse_loss(noise_pred.float(), noise.float(), reduction="mean")

@@ -1,75 +1,102 @@
-# Fine-Tuning Stable Diffusion with Custom Images
+# Stable Diffusion 3.5 LoRA Fine-Tuning
 
-This project provides a complete workflow for fine-tuning a Stable Diffusion model on a custom dataset of images collected from the web. You can train the model to learn a specific person, object, or style, and then generate new images using your custom-trained model.
+This project provides a complete workflow for fine-tuning **Stable Diffusion 3.5 Medium** using **LoRA (Low-Rank Adaptation)**. Train on custom datasets with per-image prompts and generate high-quality images on consumer GPUs.
 
-This guide will walk you through the three main stages:
-1.  **Web Scraping**: Automatically download images for your dataset.
-2.  **Fine-Tuning**: Train the model on your images using LoRA (Low-Rank Adaptation) for efficiency.
-3.  **Inference**: Generate new images with your fine-tuned model.
+## Features
+
+- **Stable Diffusion 3.5 Medium** - Latest model with excellent quality
+- **LoRA Fine-tuning** - Efficient training without modifying base model
+- **Per-image Prompts** - Custom prompts loaded from sidecar `.txt` files
+- **Comparison Tools** - Side-by-side base vs LoRA model evaluation
+- **Web Scraping** - Automated dataset collection with prompt file generation
 
 ## Prerequisites
 
-- Python 3.8+
-- An NVIDIA GPU with CUDA installed (for training and inference).
-- `pipenv` for managing Python packages.
+- **Python 3.9+**
+- **NVIDIA GPU** with 16GB+ VRAM (RTX 4080/4090, A6000, etc.)
+- **CUDA 12.2+** installed
+- **pipenv** for dependency management
 
 ## 1. Setup & Installation
 
 First, set up the Python environment and install the required packages.
 
 ```bash
-# Install pipenv if you don't have it
-pip install pipenv
 
-# Install project dependencies from the Pipfile
+# Install dependencies
 pipenv install
 
 ```
 
-## 2. Data Collection (Web Scraping)
+## Dataset Collection
 
-Use the `webscraper.py` script to download images from the internet to use as your training data. These images will be saved to the `training-images/` directory.
+### 1. Web Scraping
+Use `webscraper.py` to download images and create empty prompt files:
 
-1.  Run the script:
-    ```bash
-    pipenv run python webscraper.py
-    ```
+```bash
+pipenv run python webscraper.py
+```
 
-2.  You will be promped to enter the search terms you want to use be specific to get relevant images, and the number of images you want to download.
+- Enter search query and number of images
+- Images saved to `training-images/` with matching `.txt` files
+- **Curate your dataset**: Remove low-quality/irrelevant images
 
-3.  Curate Your Dataset: After the script finishes, go into the `training-images/` folder and **delete any irrelevant, low-quality, or duplicate images**. A clean, high-quality dataset of 30-50 images is more effective than hundreds of poor-quality ones.
+### 2. Add Custom Prompts
+Edit the `.txt` files to add descriptive prompts for each image:
 
-## 3. Fine-Tuning the Model
+```
+training-images/
+├── image1.jpg
+├── image1.txt  ← "A woman with brown hair smiling"
+├── image2.jpg
+├── image2.txt  ← "A woman in a red dress outdoors"
+└── ...
+```
 
-This step uses the `finetune.py` script to train a LoRA adapter on top of the base Stable Diffusion v1.5 model (use more powerful models if hardware allows). This process teaches the model about the concept in your training images.
+## 3. Fine-Tuning
 
-Run the fine-tuning script:
-    ```bash
-    pipenv run python finetune.py
-    ```
+Train your LoRA adapter with `finetune.py`:
+
+```bash
+pipenv run python finetune.py
+```
 
 Training will take some time, depending on your GPU and the number of images. The script will print the loss at each step. Once complete, the trained LoRA weights will be saved in the `lora_weights/` directory.
 
-## 4. Generating Images (Inference)
+## Image Generation
 
-Now that you have your custom-trained LoRA weights, you can use `inference.py` to generate new images.
+### Standard Inference
+Generate images with your fine-tuned model:
 
-Run the inference script:
-    ```bash
-    pipenv run python inference.py
-    ```
+```bash
+pipenv run python inference.py
+```
 
-The script will prompt you to enter your text prompt. **You must include your trigger word (`sks`)** to activate the fine-tuned model.
+### Model Comparison
+Compare base model vs LoRA model side-by-side:
 
-    **Examples:**
-    -   `a photo of sks person at the beach`
-    -   `an oil painting of sks person`
-    -   `sks person as a superhero, cinematic lighting`
+```bash
+pipenv run python compare.py
+```
 
-The generated image will be saved to `output/generated_image.png`.
+Generates 4 comparison images:
+- `base_baseline.png` - Base model + simple prompt
+- `base_test.png` - Base model + your prompt
+- `lora_baseline.png` - LoRA model + simple prompt  
+- `lora_test.png` - LoRA model + your prompt
 
-## File Descriptions
 
--   `webscraper.py`: Downloads images from DuckDuckGo based on your search queries.
--   `finetune.py`: Fine-tunes the Stable Diffusion model using the images in `training-images/` and saves the result to `lora_weights/`.
--   `inference.py`: Loads the base model and your LoRA weights to generate an image from a text prompt.
+## Training Tips
+
+1. **Quality over Quantity** - 20-50 high-quality images work better than hundreds of poor ones
+2. **Diverse Prompts** - Use varied, descriptive prompts for each image
+3. **Consistent Style** - Keep similar lighting/composition for style training
+4. **Monitor Loss** - Use training loss and comparison script to refine fine-tuning
+
+## Contributing
+
+Feel free to submit issues and pull requests to improve the project!
+
+## License
+
+This project is open source. Please respect the licenses of the underlying models and libraries.
