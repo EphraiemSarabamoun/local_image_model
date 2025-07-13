@@ -1,6 +1,6 @@
 import os
 import torch
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusion3Pipeline
 from peft import LoraConfig, get_peft_model
 from torchvision import transforms
 from PIL import Image
@@ -13,8 +13,8 @@ class CustomDataset(Dataset):
         self.image_paths = image_paths
         self.prompt = prompt
         self.transform = transforms.Compose([
-            transforms.Resize(512),
-            transforms.CenterCrop(512),
+            transforms.Resize(1024),
+            transforms.CenterCrop(1024),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),  # Stable Diffusion normalization
         ])
@@ -28,12 +28,12 @@ class CustomDataset(Dataset):
         return {"pixel_values": image, "text": self.prompt}
 
 # Initialize Accelerator for FP16/mixed precision
-accelerator = Accelerator(mixed_precision="fp16")
+accelerator = Accelerator(mixed_precision="bf16")
 
 # Load base Stable Diffusion model
-model_id = "CompVis/stable-diffusion-v1-4"
-pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
-pipe = pipe.to(accelerator.device)
+model_id = "stabilityai/stable-diffusion-3.5-large"
+pipe = StableDiffusion3Pipeline.from_pretrained(model_id, torch_dtype=torch.float16).to("cuda")
+# pipe = pipe.to(accelerator.device)
 pipe.enable_attention_slicing()  # Memory optimization
 pipe.vae.enable_xformers_memory_efficient_attention()  # Optional, if xformers installed
 
@@ -44,7 +44,7 @@ lora_config = LoraConfig(
     target_modules=["to_k", "to_q", "to_v", "to_out.0"],  # Cross-attention targets
     lora_dropout=0.05,
 )
-pipe.unet = get_peft_model(pipe.unet, lora_config)
+pipe.transformer = get_peft_model(pipe.transformer, lora_config)
 
 # Optionally apply LoRA to text encoder for better text understanding
 # pipe.text_encoder = get_peft_model(pipe.text_encoder, lora_config)
@@ -59,10 +59,10 @@ dataset = CustomDataset(image_paths, prompt)
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # Small batch for small data
 
 # Optimizer (only on LoRA params)
-optimizer = AdamW(pipe.unet.parameters(), lr=1e-4)  # Add text_encoder.params if using
+optimizer = AdamW(pipe.transformer.parameters(), lr=1e-4)  # Add text_encoder.params if using
 
 # Prepare with Accelerator
-pipe.unet, optimizer, dataloader = accelerator.prepare(pipe.unet, optimizer, dataloader)
+pipe.transformer, optimizer, dataloader = accelerator.prepare(pipe.transformer, optimizer, dataloader)
 
 # Training loop
 num_epochs = 50  # Adjust based on convergence; monitor loss
@@ -111,5 +111,5 @@ for epoch in range(num_epochs):
 
 # Save LoRA weights
 os.makedirs("lora_weights", exist_ok=True)
-accelerator.unwrap_model(pipe.unet).save_pretrained("lora_weights")
+accelerator.unwrap_model(pipe.transformer).save_pretrained("lora_weights")
 print("LoRA weights saved to 'lora_weights'")
