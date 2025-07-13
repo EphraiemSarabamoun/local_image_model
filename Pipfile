@@ -19,6 +19,12 @@ pillow = "*"
 sentencepiece = "*"
 protobuf = "*"
 bitsandbytes = "*"
+xformers = "*"
+ftfy = "*"
+scipy = "*"
+peft = "*"
+duckduckgo-search = "*"
+requests = "*"
 
 [dev-packages]
 

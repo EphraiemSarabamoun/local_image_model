@@ -1,3 +1,7 @@
 *.venv
 __pycache__/
 *.pyc
+*.jpeg
+output/*
+training-images/*
+lora_weights
