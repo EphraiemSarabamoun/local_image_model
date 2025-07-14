@@ -30,7 +30,6 @@ class CustomDataset(Dataset):
          txt_path = base + ".txt"
          with open(txt_path, "r", encoding="utf-8") as f:
             prompt = f.readline().strip()
-         print(prompt)
          return {"pixel_values": image, "text": prompt}
 
 
@@ -105,7 +104,7 @@ optimizer = AdamW8bit(optimizer_params, lr=1e-4)
 pipe.transformer, optimizer, dataloader = accelerator.prepare(pipe.transformer, optimizer, dataloader)
 
 # Training loop
-num_epochs = 5  # Adjust based on convergence; monitor loss
+num_epochs = 3  # Adjust based on convergence; monitor loss
 for epoch in range(num_epochs):
     total_loss = 0
     for batch in dataloader:
